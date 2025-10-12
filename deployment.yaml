@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secrets-manager-sa
+  namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secrets-manager-api
+  labels:
+    app: secrets-manager-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secrets-manager-api
+  template:
+    metadata:
+      labels:
+        app: secrets-manager-api
+    spec:
+      serviceAccountName: secrets-manager-sa   # <- use the dedicated service account
+      containers:
+        - name: secrets-manager-api
+          image: secrets-manager-api-v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: secrets-manager-key
+                  key: secret
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secrets-manager-key
+type: Opaque
+stringData:
+  secret: "your-super-secret-key"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: secrets-manager-api
+spec:
+  selector:
+    app: secrets-manager-api
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: secrets-manager-role
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: secrets-manager-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: secrets-manager-sa
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: secrets-manager-role
+  apiGroup: rbac.authorization.k8s.io
+
