@@ -1,20 +1,22 @@
-// File: internal/handlers/secrets_handler.go
 package handlers
 
 import (
 	"encoding/json"
 	"net/http"
 	"secretsManagerAPI/internal/auth"
+	"secretsManagerAPI/internal/k8s"
 	"secretsManagerAPI/internal/models"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // SecretsHandler handles CRUD for secrets
 type SecretsHandler struct {
-	Client K8sClient
+	Client k8s.K8sClient
 }
 
 // NewSecretsHandler creates a new SecretsHandler
-func NewSecretsHandler(client K8sClient) *SecretsHandler {
+func NewSecretsHandler(client k8s.K8sClient) *SecretsHandler {
 	return &SecretsHandler{
 		Client: client,
 	}
@@ -42,6 +44,8 @@ func (h *SecretsHandler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	} else if v, ok := raw["name"].(string); ok && v != "" {
 		name = v
 	} else if v, ok := raw["secret_name"].(string); ok && v != "" {
+		name = v
+	} else if v, ok := raw["secret-name"].(string); ok && v != "" {
 		name = v
 	}
 
@@ -102,10 +106,16 @@ func (h *SecretsHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 
 	secretData, err := h.Client.GetSecret(namespace, secretName)
 	if err != nil {
+		// Check for "Not Found" error specifically
+		if apierrors.IsNotFound(err) {
+			http.Error(w, "Secret not found in your namespace", http.StatusNotFound) // Return 404
+			return
+		}
+
+		// For all other errors (e.g., RBAC failure, connection issue), return 500
 		http.Error(w, "failed to get secret: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	json.NewEncoder(w).Encode(models.SecretResponse{
 		SecretName: secretName,
 		Data:       secretData,

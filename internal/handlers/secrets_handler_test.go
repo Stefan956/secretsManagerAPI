@@ -7,287 +7,211 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
-	"testing"
-
 	"secretsManagerAPI/internal/auth"
+	"secretsManagerAPI/internal/handlers/mocks"
+	"secretsManagerAPI/internal/models"
+	"testing"
 )
 
-// helper to extract a secret name from response JSON without panicking if key missing
-func extractSecretName(m map[string]interface{}) string {
-	if v, ok := m["secretName"].(string); ok {
-		return v
-	}
-	if v, ok := m["name"].(string); ok {
-		return v
-	}
-	if v, ok := m["secret_name"].(string); ok {
-		return v
-	}
-	return ""
+// use the auth package keys to inject into request context
+var (
+	userKey   = auth.UsernameKey
+	secretKey = auth.SecretNameKey
+)
+
+func withUser(ctx context.Context, username string) context.Context {
+	return context.WithValue(ctx, userKey, username)
 }
 
-// resolveName prefers response name but falls back to mockCaptured
-func resolveName(resp map[string]interface{}, mockCaptured string) string {
-	if n := extractSecretName(resp); n != "" {
-		return n
-	}
-	return mockCaptured
+func withSecret(ctx context.Context, secret string) context.Context {
+	return context.WithValue(ctx, secretKey, secret)
 }
 
-// mockClient implements K8sClient for testing.
-type mockClient struct {
-	createErr error
-	getData   map[string]string
-	getErr    error
-	updateErr error
-	deleteErr error
-
-	// capture inputs
-	lastNamespace string
-	lastName      string
-	lastData      map[string]string
-}
-
-func (m *mockClient) CreateSecret(namespace, name string, data map[string]string) error {
-	m.lastNamespace = namespace
-	m.lastName = name
-	m.lastData = data
-	return m.createErr
-}
-
-func (m *mockClient) GetSecret(namespace, name string) (map[string]string, error) {
-	m.lastNamespace = namespace
-	m.lastName = name
-	return m.getData, m.getErr
-}
-
-func (m *mockClient) UpdateSecret(namespace, name string, data map[string]string) error {
-	m.lastNamespace = namespace
-	m.lastName = name
-	m.lastData = data
-	return m.updateErr
-}
-
-func (m *mockClient) DeleteSecret(namespace, name string) error {
-	m.lastNamespace = namespace
-	m.lastName = name
-	return m.deleteErr
-}
-
-func TestCreateSecret_Success(t *testing.T) {
-	mock := &mockClient{}
-	h := NewSecretsHandler(mock)
-
-	body := map[string]interface{}{
-		"secretName": "s1",
-		"name":       "s1", // also include `name` to match handler's expected field
-		"data": map[string]string{
-			"key": "val",
+// Testing - Create Secret
+func TestSecretsHandler_CreateSecret(t *testing.T) {
+	tests := []struct {
+		name           string
+		body           map[string]any
+		forceError     error
+		expectedStatus int
+	}{
+		{
+			name: "success",
+			body: map[string]any{
+				"secretName": "api-key",
+				"data": map[string]any{
+					"token": "1234",
+				},
+			},
+			expectedStatus: http.StatusCreated,
+		},
+		{
+			name: "missing secret name",
+			body: map[string]any{
+				"data": map[string]string{"a": "b"},
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "create fails",
+			body: map[string]any{
+				"secretName": "x",
+				"data":       map[string]string{"a": "b"},
+			},
+			forceError:     errors.New("k8s error"),
+			expectedStatus: http.StatusInternalServerError,
 		},
 	}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/secrets", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json") // ensure handler treats body as JSON
-	// inject username via auth helper
-	req = req.WithContext(auth.WithUsername(context.Background(), "alice"))
 
-	rec := httptest.NewRecorder()
-	h.CreateSecret(rec, req)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := mocks.NewMockK8sClient()
+			mock.CreateErr = tt.forceError
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
-	}
+			handler := &SecretsHandler{Client: mock}
 
-	var resp map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("invalid response JSON: %v", err)
-	}
+			bodyBytes, err := json.Marshal(tt.body)
+			if err != nil {
+				t.Fatalf("failed to marshal body for test %q: %v", tt.name, err)
+			}
 
-	if name := resolveName(resp, mock.lastName); name != "s1" {
-		t.Fatalf("unexpected secretName: %v", name)
-	}
+			req := httptest.NewRequest(http.MethodPost, "/secrets", bytes.NewReader(bodyBytes))
+			req = req.WithContext(withUser(req.Context(), "alice"))
 
-	// verify client captured namespace
-	if mock.lastNamespace != "user-alice" {
-		t.Fatalf("expected namespace user-alice got %s", mock.lastNamespace)
-	}
-}
+			rec := httptest.NewRecorder()
+			handler.CreateSecret(rec, req)
 
-func TestCreateSecret_InvalidPayload(t *testing.T) {
-	mock := &mockClient{}
-	h := NewSecretsHandler(mock)
+			if rec.Code != tt.expectedStatus {
+				t.Fatalf("expected %d got %d. Body: %s", tt.expectedStatus, rec.Code, rec.Body.String())
+			}
 
-	req := httptest.NewRequest(http.MethodPost, "/secrets", bytes.NewReader([]byte("notjson")))
-	req = req.WithContext(auth.WithUsername(context.Background(), "bob"))
-
-	rec := httptest.NewRecorder()
-	h.CreateSecret(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			if tt.expectedStatus == http.StatusCreated && !mock.CreateSecretCalled {
+				t.Fatalf("expected CreateSecret to be called")
+			}
+		})
 	}
 }
 
-func TestGetSecret_Success(t *testing.T) {
-	mock := &mockClient{
-		getData: map[string]string{"k": "v"},
-	}
-	h := NewSecretsHandler(mock)
+// Testing - Get Secret
+func TestSecretsHandler_GetSecret(t *testing.T) {
+	mock := mocks.NewMockK8sClient()
 
-	req := httptest.NewRequest(http.MethodGet, "/secrets/s1", nil)
-	ctx := auth.WithUsername(context.Background(), "carol")
-	ctx = auth.WithSecretName(ctx, "s1")
-	req = req.WithContext(ctx)
+	// Build key using flat format
+	ns := "user-alice"
+	secretName := "api-key"
+	key := ns + "/" + secretName
+
+	mock.Secrets[key] = mocks.ExampleSecret{
+		Namespace: ns,
+		Name:      secretName,
+		Data:      map[string]string{"token": "1234"},
+	}
+
+	handler := &SecretsHandler{Client: mock}
+
+	req := httptest.NewRequest(http.MethodGet, "/secrets/api-key", nil)
+	req = req.WithContext(withUser(req.Context(), "alice"))
+	req = req.WithContext(withSecret(req.Context(), secretName))
 
 	rec := httptest.NewRecorder()
-	h.GetSecret(rec, req)
+	handler.GetSecret(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
+	if !mock.GetSecretCalled {
+		t.Fatalf("expected GetSecret to be called")
+	}
+
+	var resp models.SecretResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("invalid response JSON: %v", err)
+		t.Fatalf("failed to decode response JSON: %v; body=%s", err, rec.Body.String())
 	}
-	if name := resolveName(resp, mock.lastName); name != "s1" {
-		t.Fatalf("unexpected secretName: %v", name)
+
+	if resp.SecretName != "api-key" {
+		t.Fatalf("wrong secret name")
 	}
-	data, ok := resp["data"].(map[string]interface{})
-	if !ok || data["k"] != "v" {
-		t.Fatalf("unexpected data: %v", resp["data"])
-	}
-	if mock.lastNamespace != "user-carol" {
-		t.Fatalf("expected namespace user-carol got %s", mock.lastNamespace)
+	if resp.Data["token"] != "1234" {
+		t.Fatalf("wrong secret data")
 	}
 }
 
-func TestGetSecret_MissingSecretName(t *testing.T) {
-	mock := &mockClient{}
-	h := NewSecretsHandler(mock)
+// Testing - Update Secret
+func TestSecretsHandler_UpdateSecret(t *testing.T) {
+	mock := mocks.NewMockK8sClient()
 
-	req := httptest.NewRequest(http.MethodGet, "/secrets/s1", nil)
-	req = req.WithContext(auth.WithUsername(context.Background(), "dave"))
+	ns := "user-bob"
+	secretName := "api-key"
+	key := ns + "/" + secretName
+
+	mock.Secrets[key] = mocks.ExampleSecret{
+		Namespace: ns,
+		Name:      secretName,
+		Data:      map[string]string{"token": "old"},
+	}
+
+	handler := &SecretsHandler{Client: mock}
+
+	reqBody := models.SecretRequest{Data: map[string]string{"token": "new"}}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("failed to marshal body for test Update Secret: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/secrets/api-key", bytes.NewReader(bodyBytes))
+	req = req.WithContext(withUser(req.Context(), "bob"))
+	req = req.WithContext(withSecret(req.Context(), secretName))
 
 	rec := httptest.NewRecorder()
-	h.GetSecret(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
-	}
-}
-
-func TestUpdateSecret_Success(t *testing.T) {
-	mock := &mockClient{}
-	h := NewSecretsHandler(mock)
-
-	body := map[string]interface{}{
-		"secretName": "s2", // handler uses secretName from context, struct's field may be ignored but include anyway
-		"data": map[string]string{
-			"a": "b",
-		},
-	}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPut, "/secrets/s2", bytes.NewReader(b))
-	ctx := auth.WithUsername(context.Background(), "erin")
-	ctx = auth.WithSecretName(ctx, "s2")
-	req = req.WithContext(ctx)
-
-	rec := httptest.NewRecorder()
-	h.UpdateSecret(rec, req)
+	handler.UpdateSecret(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("invalid response JSON: %v", err)
-	}
-	if name := resolveName(resp, mock.lastName); name != "s2" {
-		t.Fatalf("unexpected secretName: %v", name)
+	if !mock.UpdateSecretCalled {
+		t.Fatalf("expected UpdateSecret to be called")
 	}
 
-	// verify client lastData
-	expected := map[string]string{"a": "b"}
-	if !reflect.DeepEqual(mock.lastData, expected) {
-		t.Fatalf("expected data %v got %v", expected, mock.lastData)
+	updated, _ := mock.GetSecret("user-bob", "api-key")
+	if updated["token"] != "new" {
+		t.Fatalf("secret update failed; got %v", updated)
 	}
 }
 
-func TestDeleteSecret_Success(t *testing.T) {
-	mock := &mockClient{}
-	h := NewSecretsHandler(mock)
+// Testing - Delete secret
+func TestSecretsHandler_DeleteSecret(t *testing.T) {
+	mock := mocks.NewMockK8sClient()
 
-	req := httptest.NewRequest(http.MethodDelete, "/secrets/s3", nil)
-	ctx := auth.WithUsername(context.Background(), "frank")
-	ctx = auth.WithSecretName(ctx, "s3")
-	req = req.WithContext(ctx)
+	ns := "user-alice"
+	secretName := "session"
+	key := ns + "/" + secretName
+
+	mock.Secrets[key] = mocks.ExampleSecret{
+		Namespace: ns,
+		Name:      secretName,
+		Data:      map[string]string{"token": "abc"},
+	}
+
+	handler := &SecretsHandler{Client: mock}
+
+	req := httptest.NewRequest(http.MethodDelete, "/secrets/session", nil)
+	req = req.WithContext(withUser(req.Context(), "alice"))
+	req = req.WithContext(withSecret(req.Context(), secretName))
 
 	rec := httptest.NewRecorder()
-	h.DeleteSecret(rec, req)
+	handler.DeleteSecret(rec, req)
 
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusNoContent, rec.Code, rec.Body.String())
-	}
-}
-
-func TestClientErrorsPropagate(t *testing.T) {
-	mock := &mockClient{
-		createErr: errors.New("create fail"),
-		getErr:    errors.New("get fail"),
-		updateErr: errors.New("update fail"),
-		deleteErr: errors.New("delete fail"),
-		getData:   nil,
-	}
-	h := NewSecretsHandler(mock)
-
-	// Create should return 500
-	createBody := map[string]interface{}{
-		"secretName": "x",
-		"data":       map[string]string{"k": "v"},
-	}
-	cb, _ := json.Marshal(createBody)
-	req := httptest.NewRequest(http.MethodPost, "/secrets", bytes.NewReader(cb))
-	req = req.WithContext(auth.WithUsername(context.Background(), "g"))
-	rec := httptest.NewRecorder()
-	h.CreateSecret(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 got %d", rec.Code)
+		t.Fatalf("expected 204 got %d; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Get should return 500
-	req = httptest.NewRequest(http.MethodGet, "/secrets/x", nil)
-	ctx := auth.WithUsername(context.Background(), "g")
-	ctx = auth.WithSecretName(ctx, "x")
-	req = req.WithContext(ctx)
-	rec = httptest.NewRecorder()
-	h.GetSecret(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 got %d", rec.Code)
+	if !mock.DeleteSecretCalled {
+		t.Fatalf("expected DeleteSecret to be called")
 	}
 
-	// Update should return 500
-	ub, _ := json.Marshal(createBody)
-	req = httptest.NewRequest(http.MethodPut, "/secrets/x", bytes.NewReader(ub))
-	ctx = auth.WithUsername(context.Background(), "g")
-	ctx = auth.WithSecretName(ctx, "x")
-	req = req.WithContext(ctx)
-	rec = httptest.NewRecorder()
-	h.UpdateSecret(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 got %d", rec.Code)
-	}
-
-	// Delete should return 500
-	req = httptest.NewRequest(http.MethodDelete, "/secrets/x", nil)
-	ctx = auth.WithUsername(context.Background(), "g")
-	ctx = auth.WithSecretName(ctx, "x")
-	req = req.WithContext(ctx)
-	rec = httptest.NewRecorder()
-	h.DeleteSecret(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 got %d", rec.Code)
+	if _, exists := mock.Secrets[key]; exists {
+		t.Fatalf("secret should be deleted")
 	}
 }

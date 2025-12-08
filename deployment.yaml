@@ -23,7 +23,7 @@ spec:
       serviceAccountName: secrets-manager-sa   # <- use the dedicated service account
       containers:
         - name: secrets-manager-api
-          image: secrets-manager-api-v1
+          image: secrets-manager-api-v2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

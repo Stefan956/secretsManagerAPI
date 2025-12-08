@@ -22,10 +22,12 @@ func main() {
 	}
 
 	mySecretKey := os.Getenv("SECRET_KEY")
-	//fmt.Println(mySecretKey) //prints: random2
+	if mySecretKey == "" {
+		log.Fatal("SECRET_KEY environment variable is required")
+	}
 
 	// Initialize JWT manager
-	jwtManager := auth.NewJWTManager(mySecretKey, time.Hour*24) //to do: to check the secret key from the environment variable
+	jwtManager := auth.NewJWTManager(mySecretKey, time.Hour*24)
 
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(k8sClient, jwtManager)

@@ -1,0 +1,57 @@
+name: E2E tests (Kind)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Run e2e (true/false)'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E tests (Kind)
+    runs-on: ubuntu-latest
+    # Only run if this is a workflow_dispatch OR the PR has the label 'run-e2e'
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Install kind and kubectl
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name e2e --wait 60s
+          kind get kubeconfig --name e2e > kind-kubeconfig
+          echo "KUBECONFIG=${{ github.workspace }}/kind-kubeconfig" >> $GITHUB_ENV
+
+      - name: Run e2e tests against kind
+        env:
+          KUBECONFIG: ${{ github.workspace }}/kind-kubeconfig
+          RUN_E2E: "true"
+        run: |
+          # run the e2e tests or the subset you want
+          go test ./tests/e2e -v -run TestE2E_UserAndSecretFlows
+
+      - name: Tear down kind cluster
+        if: always()
+        run: kind delete cluster --name e2e || true

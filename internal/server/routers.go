@@ -18,13 +18,13 @@ type scopedRoute struct {
 
 // Router holds dependencies
 type Router struct {
-	JWTManager     *auth.JWTManager
-	UserHandler    *handlers.UserHandler
-	SecretsHandler *handlers.SecretsHandler
+	JWTManager     auth.JWT
+	UserHandler    handlers.UserHandlerInterface
+	SecretsHandler handlers.SecretsHandlerInterface
 }
 
 // NewRouter initializes all routes and returns an http.Handler
-func NewRouter(jwtManager *auth.JWTManager, userHandler *handlers.UserHandler, secretsHandler *handlers.SecretsHandler) http.Handler {
+func NewRouter(jwtManager auth.JWT, userHandler handlers.UserHandlerInterface, secretsHandler handlers.SecretsHandlerInterface) http.Handler {
 	// Define routes
 	routes := []scopedRoute{
 		// Public routes
@@ -89,8 +89,6 @@ func NewRouter(jwtManager *auth.JWTManager, userHandler *handlers.UserHandler, s
 	}
 
 	// Register routes with mux
-	// mux - (short for "multiplexer") matches incoming HTTP requests against a list of registered routes
-	//and calls the associated handler for the first match
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { //calls route without JWT
@@ -105,7 +103,7 @@ func NewRouter(jwtManager *auth.JWTManager, userHandler *handlers.UserHandler, s
 
 		// Wrap protected routes with JWT middleware
 		if route.Protected {
-			handler := auth.JWTMiddleware(jwtManager, handlerFunc) //calls route with JWT
+			handler := auth.JWTMiddleware(jwtManager, handlerFunc)
 			mux.Handle(route.Pattern, handler)
 			continue
 		}

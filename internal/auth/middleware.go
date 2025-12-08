@@ -7,7 +7,7 @@ import (
 )
 
 // JWTMiddleware validates JWT tokens and injects username into request context
-func JWTMiddleware(jwtManager *JWTManager, next http.Handler) http.Handler {
+func JWTMiddleware(jwtManager JWT, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -55,6 +55,6 @@ func MethodMiddleware(allowedMethods ...string) func(http.Handler) http.Handler 
 
 // UsernameFromContext retrieves the username from context
 func UsernameFromContext(ctx context.Context) (string, bool) {
-	username, ok := ctx.Value(usernameKey).(string)
+	username, ok := ctx.Value(UsernameKey).(string)
 	return username, ok
 }

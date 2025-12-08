@@ -11,7 +11,7 @@ import (
 func (c *Client) CreateSecret(namespace, name string, data map[string]string) error {
 	secret := &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, //this must be set
+			Name: name, // mandatory field
 		},
 		StringData: data,
 		Type:       v1.SecretTypeOpaque,
@@ -33,7 +33,7 @@ func (c *Client) GetSecret(namespace, name string) (map[string]string, error) {
 
 	result := make(map[string]string)
 	for k, v := range secret.Data {
-		result[k] = string(v) // convert from []byte to string
+		result[k] = string(v)
 	}
 
 	return result, nil

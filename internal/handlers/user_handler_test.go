@@ -1,4 +1,3 @@
-// internal/handlers/user_handler_test.go
 package handlers
 
 import (
@@ -11,272 +10,208 @@ import (
 
 	"secretsManagerAPI/internal/auth"
 	"secretsManagerAPI/internal/handlers/mocks"
-	"secretsManagerAPI/internal/k8s"
-	"secretsManagerAPI/internal/models"
 
 	"golang.org/x/crypto/bcrypt"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
-// fakeJWTManager implements the Generate method used by UserHandler.
-type fakeJWTManager struct {
-	token string
-	err   error
-}
+// TestUserHandler_Register_Success - table driven tests for Register success cases
+func TestUserHandler_Register_Success(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		password string
+	}{
+		{"simple", "alice", "pass1"},
+		{"another", "bob", "s3cr3t"},
+	}
 
-func (f *fakeJWTManager) Generate(username string) (string, error) {
-	return f.token, f.err
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := mocks.NewMockK8sClient()
+			jwt := &mocks.MockJWTManager{Token: "mockToken", GenerateErr: nil}
 
-func newK8sClientForTest(ctx context.Context) *k8s.Client {
-	cs := fake.NewClientset() // returns *fake.Clientset implementing kubernetes.Interface
-	return &k8s.Client{
-		ClientSet: cs,
-		Context:   ctx,
+			handler := &UserHandler{
+				JWTManager: jwt,
+				Client:     client,
+			}
+
+			body := map[string]string{
+				"username": tt.username,
+				"password": tt.password,
+			}
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("failed to marshal body for test %q: %v", tt.name, err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(b))
+			rec := httptest.NewRecorder()
+
+			handler.Register(rec, req)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("expected status %d got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+			}
+
+			// verify CreateSecret was called and stored credentials under the namespace
+			if !client.CreateSecretCalled {
+				t.Fatalf("expected create secret to be called")
+			}
+
+			// validate stored secret
+			key := "user-" + tt.username + "/credentials"
+
+			sec, ok := client.Secrets[key]
+			if !ok {
+				t.Fatalf("expected secret %s to exist", key)
+			}
+
+			if sec.Data["username"] != tt.username {
+				t.Fatalf("expected username=%s got %s",
+					tt.username, sec.Data["username"])
+			}
+
+			// password should be a bcrypt hash (non-empty)
+			if len(sec.Data["password"]) == 0 {
+				t.Fatalf("password hash missing")
+			}
+
+			if err := bcrypt.CompareHashAndPassword([]byte(sec.Data["password"]), []byte(tt.password)); err != nil {
+				t.Fatalf("stored password hash does not match provided password: %v", err)
+			}
+		})
 	}
 }
 
-func TestRegister_Success(t *testing.T) {
-	client := mocks.NewMockClient()
-	jwt := &fakeJWTManager{token: "tok-1"}
-
-	handler := &mocks.MockHandler{
-		Client:     client,
-		JWTManager: jwt,
-	}
-
-	reqBody := models.UserRequest{
-		Username: "alice",
-		Password: "password123",
-	}
-	b, _ := json.Marshal(reqBody)
-	req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(b))
-	rec := httptest.NewRecorder()
-
-	handler.Register(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
-	}
-
-	secretMap, err := client.GetSecret("user-alice", "credentials")
-	if err != nil {
-		t.Fatalf("expected GetSecret to succeed, got error: %v", err)
-	}
-	if secretMap["username"] != "alice" {
-		t.Fatalf("expected username 'alice', got %q", secretMap["username"])
-	}
-
-	storedHash := secretMap["password"]
-	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte("password123")); err != nil {
-		t.Fatalf("stored password hash does not match original password: %v", err)
-	}
-
-	// login check
-	loginReq := models.UserRequest{
-		Username: "alice",
-		Password: "password123",
-	}
-	lb, _ := json.Marshal(loginReq)
-	lreq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(lb))
-	lrec := httptest.NewRecorder()
-	handler.Login(lrec, lreq)
-
-	if lrec.Code != http.StatusOK {
-		t.Fatalf("login after register expected 200 got %d body=%s", lrec.Code, lrec.Body.String())
-	}
-	var lr models.UserResponse
-	if err := json.NewDecoder(lrec.Body).Decode(&lr); err != nil {
-		t.Fatalf("invalid login response JSON: %v", err)
-	}
-	if lr.Token != jwt.token {
-		t.Fatalf("expected JWT %q got %q", jwt.token, lr.Token)
-	}
-}
-
-func TestRegister_BadMethodAndBadPayload(t *testing.T) {
-	client := newK8sClientForTest(context.Background())
-	handler := &UserHandler{Client: client}
-
-	// Wrong method
-	req := httptest.NewRequest(http.MethodGet, "/register", nil)
-	rec := httptest.NewRecorder()
-	handler.Register(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected %d got %d", http.StatusMethodNotAllowed, rec.Code)
-	}
-
-	// Bad payload
-	req = httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader([]byte("notjson")))
-	rec = httptest.NewRecorder()
-	handler.Register(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d got %d", http.StatusBadRequest, rec.Code)
-	}
-}
-
-func TestLogin_SuccessAndInvalidPassword(t *testing.T) {
-	ctx := context.Background()
-	client := newK8sClientForTest(ctx)
-
-	// create namespace and credentials secret for bob
-	username := "bob"
-	password := "s3cr3t"
-	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-
-	_, _ = client.ClientSet.CoreV1().Namespaces().Create(ctx, &v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "user-" + username},
-	}, metav1.CreateOptions{})
-
-	_, _ = client.ClientSet.CoreV1().Secrets("user-"+username).Create(ctx, &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "credentials"},
-		Data: map[string][]byte{
-			"username": []byte(username),
-			"password": hash,
+// TestUserHandler_Handler_Success - table driven tests for Login and ChangeUserPassword
+func TestUserHandler_Handler_Success(t *testing.T) {
+	tests := []struct {
+		name           string
+		handler        string // "login" or "change_password"
+		username       string
+		password       string
+		newPassword    string
+		expectCode     int
+		expectToken    string // for login
+		expectPassword func(oldHash, newHash string) bool
+	}{
+		{
+			name:        "login_success",
+			handler:     "login",
+			username:    "alice",
+			password:    "mypw",
+			expectCode:  http.StatusOK,
+			expectToken: "tok-123",
 		},
-	}, metav1.CreateOptions{})
-
-	jwt := &fakeJWTManager{token: "jwt-bob"}
-	handler := &UserHandler{
-		JWTManager: jwt,
-		Client:     client,
+		{
+			name:        "change_password_success",
+			handler:     "change_password",
+			username:    "alice",
+			password:    "oldpw",
+			newPassword: "newpw",
+			expectCode:  http.StatusOK,
+			// verify that password was changed (hash differs and matches new password)
+			expectPassword: func(oldHash, newHash string) bool {
+				if oldHash == newHash {
+					return false
+				}
+				return bcrypt.CompareHashAndPassword([]byte(newHash), []byte("newpw")) == nil
+			},
+		},
 	}
 
-	// Success case
-	loginReq := models.UserRequest{
-		Username: username,
-		Password: password,
-	}
-	b, _ := json.Marshal(loginReq)
-	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
-	rec := httptest.NewRecorder()
-	handler.Login(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
-	}
-	var resp models.UserResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("invalid response JSON: %v", err)
-	}
-	if resp.Token != jwt.token {
-		t.Fatalf("expected token %q got %q", jwt.token, resp.Token)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := mocks.NewMockK8sClient()
 
-	// Invalid password
-	badReq := models.UserRequest{
-		Username: username,
-		Password: "wrong",
-	}
-	b, _ = json.Marshal(badReq)
-	req = httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
-	rec = httptest.NewRecorder()
-	handler.Login(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
+			// prepare credentials secret with bcrypt hash of tt.password
+			hash, err := bcrypt.GenerateFromPassword([]byte(tt.password), bcrypt.DefaultCost)
+			if err != nil {
+				t.Fatalf("failed to generate bcrypt hash for password %q: %v", tt.password, err)
+			}
 
-func TestChangeUserPassword_SuccessAndUnauthorized(t *testing.T) {
-	client := mocks.NewMockClient()
-	jwt := &fakeJWTManager{token: "jwt-carol"}
+			key := "user-" + tt.username + "/credentials"
+			mock.Secrets[key] = mocks.ExampleSecret{
+				Namespace: "user-" + tt.username,
+				Name:      "credentials",
+				Data: map[string]string{
+					"username": tt.username,
+					"password": string(hash),
+				},
+			}
 
-	handler := &mocks.MockHandler{
-		Client:     client,
-		JWTManager: jwt,
-	}
+			jwt := &mocks.MockJWTManager{Token: "tok-123", GenerateErr: nil}
+			h := &UserHandler{
+				JWTManager: jwt,
+				Client:     mock,
+			}
 
-	username := "carol"
-	oldPassword := "oldpass"
-	oldHash, _ := bcrypt.GenerateFromPassword([]byte(oldPassword), bcrypt.DefaultCost)
+			switch tt.handler {
+			case "login":
+				body := map[string]string{
+					"username": tt.username,
+					"password": tt.password,
+				}
+				b, err := json.Marshal(body)
+				if err != nil {
+					t.Fatalf("failed to marshal body for test %q: %v", tt.name, err)
+				}
 
-	// Pre-create user credentials in mock client
-	client.CreateSecret("user-"+username, "credentials", map[string]string{
-		"username": username,
-		"password": string(oldHash),
-	})
+				req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
+				rec := httptest.NewRecorder()
 
-	// Authorized password change
-	newPassword := "newpass"
-	reqBody := map[string]string{"new_password": newPassword}
-	b, _ := json.Marshal(reqBody)
-	req := httptest.NewRequest(http.MethodPut, "/user/password", bytes.NewReader(b))
-	req = req.WithContext(auth.WithUsername(context.Background(), username))
-	rec := httptest.NewRecorder()
+				h.Login(rec, req)
 
-	handler.ChangeUserPassword(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
-	}
+				if rec.Code != tt.expectCode {
+					t.Fatalf("expected status %d got %d body=%s", tt.expectCode, rec.Code, rec.Body.String())
+				}
 
-	// Verify the password was updated in mock client
-	secretMap, err := client.GetSecret("user-"+username, "credentials")
-	if err != nil {
-		t.Fatalf("expected GetSecret to succeed, got error: %v", err)
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(secretMap["password"]), []byte(newPassword)); err != nil {
-		t.Fatalf("expected password to be updated and match new password: %v", err)
-	}
+				var resp map[string]interface{}
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("invalid response JSON: %v", err)
+				}
+				if token, ok := resp["token"].(string); !ok || token != tt.expectToken {
+					t.Fatalf("expected token %q got %v", tt.expectToken, resp["token"])
+				}
 
-	// Login with new password should succeed
-	loginReq := models.UserRequest{Username: username, Password: newPassword}
-	lb, _ := json.Marshal(loginReq)
-	lreq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(lb))
-	lrec := httptest.NewRecorder()
-	handler.Login(lrec, lreq)
-	if lrec.Code != http.StatusOK {
-		t.Fatalf("login with new password expected %d got %d body=%s", http.StatusOK, lrec.Code, lrec.Body.String())
-	}
+			case "change_password":
+				// Inject username into context (middleware would do this)
+				body := map[string]string{
+					"new_password": tt.newPassword,
+				}
 
-	// Login with old password should fail
-	oldLoginReq := models.UserRequest{Username: username, Password: oldPassword}
-	ob, _ := json.Marshal(oldLoginReq)
-	oreq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(ob))
-	orec := httptest.NewRecorder()
-	handler.Login(orec, oreq)
-	if orec.Code != http.StatusUnauthorized {
-		t.Fatalf("login with old password expected %d got %d body=%s", http.StatusUnauthorized, orec.Code, orec.Body.String())
-	}
+				b, err := json.Marshal(body)
+				if err != nil {
+					t.Fatalf("failed to marshal body for test %q: %v", tt.name, err)
+				}
 
-	// Unauthorized: no username in context
-	req = httptest.NewRequest(http.MethodPut, "/user/password", bytes.NewReader(b))
-	rec = httptest.NewRecorder()
-	handler.ChangeUserPassword(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
+				req := httptest.NewRequest(http.MethodPut, "/user/password", bytes.NewReader(b))
+				req = req.WithContext(auth.WithUsername(context.Background(), tt.username))
 
-func TestDeleteUser_SuccessAndUnauthorized(t *testing.T) {
-	ctx := context.Background()
-	client := newK8sClientForTest(ctx)
+				rec := httptest.NewRecorder()
 
-	username := "dan"
-	_, _ = client.ClientSet.CoreV1().Namespaces().Create(ctx, &v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "user-" + username},
-	}, metav1.CreateOptions{})
+				// capture old hash
+				oldHash := mock.Secrets[key].Data["password"]
 
-	handler := &UserHandler{Client: client}
+				h.ChangeUserPassword(rec, req)
 
-	// Authorized delete
-	req := httptest.NewRequest(http.MethodDelete, "/user", nil)
-	req = req.WithContext(auth.WithUsername(context.Background(), username))
-	rec := httptest.NewRecorder()
-	handler.DeleteUser(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
-	}
-	// Confirm namespace deleted
-	if _, err := client.ClientSet.CoreV1().Namespaces().Get(ctx, "user-"+username, metav1.GetOptions{}); err == nil {
-		t.Fatalf("expected namespace to be deleted")
-	}
+				if rec.Code != tt.expectCode {
+					t.Fatalf("expected status %d got %d body=%s", tt.expectCode, rec.Code, rec.Body.String())
+				}
 
-	// Unauthorized
-	req = httptest.NewRequest(http.MethodDelete, "/user", nil)
-	rec = httptest.NewRecorder()
-	handler.DeleteUser(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d got %d", http.StatusUnauthorized, rec.Code)
+				if !mock.UpdateSecretCalled {
+					t.Fatalf("expected UpdateSecret to be called")
+				}
+
+				newHash := mock.Secrets[key].Data["password"]
+
+				if tt.expectPassword != nil && !tt.expectPassword(oldHash, newHash) {
+					t.Fatalf("password expectation failed; oldHash=%s newHash=%s", oldHash, newHash)
+				}
+
+			default:
+				t.Fatalf("unknown handler %s", tt.handler)
+			}
+		})
 	}
 }

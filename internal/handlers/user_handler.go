@@ -6,23 +6,20 @@ import (
 	"net/http"
 	"secretsManagerAPI/internal/auth"
 	"secretsManagerAPI/internal/k8s"
+
 	"secretsManagerAPI/internal/models"
 
 	"golang.org/x/crypto/bcrypt"
-	v1 "k8s.io/api/core/v1"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // UserHandler handles user registration and login
 type UserHandler struct {
-	//JWTManager *auth.JWTManager
 	JWTManager auth.JWTGenerator
-	Client     *k8s.Client
+	Client     k8s.K8sClient
 }
 
 // NewUserHandler creates a new UserHandler
-func NewUserHandler(client *k8s.Client, jwtManager auth.JWTGenerator) *UserHandler {
+func NewUserHandler(client k8s.K8sClient, jwtManager auth.JWTGenerator) *UserHandler {
 	return &UserHandler{
 		JWTManager: jwtManager,
 		Client:     client,
@@ -44,10 +41,8 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	namespace := "user-" + req.Username
 
-	// Create namespace
-	if _, err := h.Client.ClientSet.CoreV1().Namespaces().Create(h.Client.Context, &v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace},
-	}, metav1.CreateOptions{}); err != nil {
+	// Create user namespace
+	if err := h.Client.CreateNamespace("user-" + req.Username); err != nil {
 		http.Error(w, "Failed to create namespace: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -103,11 +98,6 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Credentials not found", http.StatusInternalServerError)
 		return
 	}
-	//hash1, _ := bcrypt.GenerateFromPassword([]byte(storedHash), bcrypt.DefaultCost)
-	//hash2, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	//fmt.Println(string(hash1))
-	//fmt.Println(string(hash2))
-	//fmt.Println("Error is here!")
 
 	// Compare password
 	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(req.Password)); err != nil {
@@ -132,6 +122,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// ChangeUserPassword allows a user to change their password
 func (h *UserHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -184,6 +175,7 @@ func (h *UserHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// DeleteUser deletes the user namespace and all associated resources
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -197,10 +189,10 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespace := "user-" + username
+	//namespace := "user-" + username
 
 	// Delete namespace (which deletes all secrets/resources)
-	if err := h.Client.ClientSet.CoreV1().Namespaces().Delete(h.Client.Context, namespace, metav1.DeleteOptions{}); err != nil {
+	if err := h.Client.DeleteNamespace("user-" + username); err != nil {
 		http.Error(w, "Failed to delete user namespace: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

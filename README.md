@@ -1,6 +1,6 @@
 # README
 curl requests:
-requests for user registration, login, credentials updata ana deletion:
+requests for user registration, login, credentials update ana deletion:
 
 curl -X POST http://localhost:8080/login \
 -H "Content-Type: application/json" \
@@ -10,14 +10,6 @@ curl -X POST http://localhost:8080/register -H "Content-Type: application/json" 
 -d '{
 "username": "iskren",
 "password": "password123"
-}'
-
-curl -X PUT http://localhost:8080/user/change-details/ \
--H "Authorization: Bearer YOUR_TOKEN" \
--H "Content-Type: application/json" \
--d '{
-"new_username": "bob",
-"new_password": "newSecretPass123"
 }'
 
 curl -X PUT http://localhost:8080/user/change-password/ \
