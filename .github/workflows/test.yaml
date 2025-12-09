@@ -44,12 +44,7 @@ jobs:
     name: Integration tests (envtest)
     runs-on: ubuntu-latest
     needs: unit
-    # Run integration on every PR commit and pushes;
-    # It is kept on pull_request so PR commits trigger it
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    env:
-      # expose the location where setup-envtest will download bins
-      KUBEBUILDER_ASSETS: ${{ github.workspace }}/testbin
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,28 +54,17 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ${{ runner.workspace }}/.modcache
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Install envtest binaries
-        run: |
-            mkdir -p ./testbin
-            # The flag '-p path' tells setup-envtest to print the actual location of the binaries
-            ASSETS_PATH=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin -p path --force)
-            
-            # Write the variable to the GitHub Actions environment file so subsequent steps see it
-            echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
-
       - name: Run integration tests
         run: |
-            # Verify the path is set correctly
-            echo "Running tests with assets at: $KUBEBUILDER_ASSETS"
-            go test ./tests/integration -v -count=1
+          # 1. Create the folder
+          mkdir -p ./testbin
+          
+          # 2. Download binaries and capture the ABSOLUTE path
+          # We use $(pwd) to ensure the path works regardless of where 'go test' runs
+          export KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir $(pwd)/testbin -p path --force)
+          
+          # 3. Debugging: Print the path to be sure
+          echo "KUBEBUILDER_ASSETS is set to: $KUBEBUILDER_ASSETS"
+          
+          # 4. Run the tests
+          go test ./tests/integration -v -count=1
