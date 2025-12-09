@@ -70,19 +70,17 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Install envtest binaries (kube-apiserver, etcd, kubectl)
+      - name: Install envtest binaries
         run: |
-          mkdir -p ./testbin
-          go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin --force
-
-      - name: list downloaded envtest binaries
-        run: |
-          echo "KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
-          ls -la ./testbin || true
+            mkdir -p ./testbin
+            # The flag '-p path' tells setup-envtest to print the actual location of the binaries
+            ASSETS_PATH=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin -p path --force)
+            
+            # Write the variable to the GitHub Actions environment file so subsequent steps see it
+            echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
 
       - name: Run integration tests
-        env:
-          KUBEBUILDER_ASSETS: ${{ github.workspace }}/testbin
         run: |
-          # run your integration test package(s)
-          go test ./tests/integration -v
+            # Verify the path is set correctly
+            echo "Running tests with assets at: $KUBEBUILDER_ASSETS"
+            go test ./tests/integration -v -count=1
