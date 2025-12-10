@@ -23,7 +23,8 @@ jobs:
       - uses: actions/setup-go@v4
         with:
           go-version: "1.25"
-          
+
+      # compute lowercase owner and expose it to later steps in this job
       - name: Lowercase repo owner
         run: |
           echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
@@ -46,21 +47,44 @@ jobs:
           echo "$PKGS"
           go test $PKGS -v
 
-      - name: Install envtest binaries
+      - name: Install setup-envtest and download envtest binaries (kube-apiserver, etcd, kubectl)
         run: |
           set -euxo pipefail
-          mkdir -p ./testbin
-          go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin --force
 
-      - name: List envtest binaries (debug)
+          mkdir -p ./testbin
+
+          # Install the setup-envtest CLI (pin the version if you want reproducibility)
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+          # Use the CLI to download control-plane binaries into ./testbin.
+          # Change "1.25.0" if your tests expect a different k8s version.
+          ASSETS_PATH="$(setup-envtest use 1.25.0 -p path --bin-dir "$(pwd)/testbin" --force)"
+
+          echo "setup-envtest placed assets at: $ASSETS_PATH"
+          echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
+
+          # quick verification: list files and check etcd exists and is executable
+          echo "Listing assets dir:"
+          ls -la "$ASSETS_PATH" || true
+
+          if [ ! -x "$ASSETS_PATH/etcd" ]; then
+            echo "ERROR: etcd not found or not executable at $ASSETS_PATH/etcd"
+            exit 1
+          fi
+
+      - name: show KUBEBUILDER_ASSETS and list
         run: |
-          echo "KUBEBUILDER_ASSETS=$(pwd)/testbin"
-          ls -la ./testbin || true
+          echo "KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS:-$GITHUB_WORKSPACE/testbin}"
+          ls -la "${KUBEBUILDER_ASSETS:-./testbin}" || true
 
       - name: Run integration tests (envtest)
         env:
-          KUBEBUILDER_ASSETS: ${{ github.workspace }}/testbin
+          # this env var comes from the previous step (written to $GITHUB_ENV)
+          KUBEBUILDER_ASSETS: ${{ env.KUBEBUILDER_ASSETS }}
         run: |
+          set -euxo pipefail
+          echo "Using KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
+          ls -la "$KUBEBUILDER_ASSETS"
           go test ./tests/integration -v -count=1
 
   build-and-push:
