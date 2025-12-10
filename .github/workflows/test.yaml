@@ -35,10 +35,15 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Run unit tests
+      - name: Run unit tests (exclude integration/e2e)
         run: |
-          # Run all unit tests (keep integration/e2e tests in separate directories or gated)
-          go test ./... -v
+          set -euxo pipefail
+          # Build a list of packages and exclude tests/integration and tests/e2e
+          PKGS="$(go list ./... | grep -v -E '(/tests/integration$|/tests/e2e$)')"
+          echo "Running unit tests for packages:"
+          echo "$PKGS"
+          # Run tests only for the filtered packages
+          go test $PKGS -v
 
   integration:
     name: Integration tests (envtest)
@@ -69,18 +74,16 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # prepare directory for downloaded binaries
           mkdir -p ./testbin
 
-          # Install the setup-envtest tool (pin if you want reproducible tool version)
+          # Install the CLI that helps download envtest binaries
           go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
-          # Use setup-envtest to download control-plane binaries.
-          # Replace "1.25.0" with the k8s version your tests expect.
+          # Download control-plane binaries (adjust k8s version if needed)
           ASSETS_PATH="$(setup-envtest use 1.25.0 -p path --bin-dir "$(pwd)/testbin" --force)"
           echo "setup-envtest returned: $ASSETS_PATH"
 
-          # Verify etcd binary exists and is executable
+          # Fail early if etcd is missing or not executable
           if [ ! -x "$ASSETS_PATH/etcd" ]; then
             echo "Contents of assets dir:"
             ls -la "$ASSETS_PATH" || true
@@ -88,15 +91,16 @@ jobs:
             exit 1
           fi
 
-          # Export for subsequent steps
+          # Export path for subsequent steps
           echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
 
       - name: Run integration tests (envtest)
         env:
-          # make sure env is present (it will be from previous step via $GITHUB_ENV)
+          # KUBEBUILDER_ASSETS is set via $GITHUB_ENV in the previous step
           KUBEBUILDER_ASSETS: ${{ env.KUBEBUILDER_ASSETS }}
         run: |
           set -euxo pipefail
           echo "Using KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
           ls -la "$KUBEBUILDER_ASSETS"
+          # Run only the integration tests
           go test ./tests/integration -v -count=1
