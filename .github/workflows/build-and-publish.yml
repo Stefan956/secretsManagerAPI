@@ -54,7 +54,7 @@ jobs:
           # downloads binaries into ./testbin
           go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin --force
 
-      - name: Debug: list envtest binaries
+      - name: list envtest binaries
         run: |
           echo "KUBEBUILDER_ASSETS=${{ github.workspace }}/testbin"
           ls -la ./testbin || true
