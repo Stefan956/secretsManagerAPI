@@ -1,5 +1,6 @@
-name: Build and Publish Docker image
+name: Build and Publish Docker image (unit + integration + push)
 
+# Run on pushes to main and manual dispatch (use dispatch for ad-hoc runs)
 on:
   push:
     branches:
@@ -10,12 +11,72 @@ permissions:
   contents: read
   packages: write
 
+env:
+  GOFLAGS: -mod=mod
+
 jobs:
-  build-and-push:
+  test:
+    name: Run tests (unit + integration)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Set OWNER_LC env (lowercase repo owner)
+        run: echo "OWNER_LC=${{ toLower(github.repository_owner) }}" >> $GITHUB_ENV
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ github.workspace }}/.modcache
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install Go dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: |
+          # Fast unit tests first — keep integration in ./tests/integration
+          go test ./... -v
+
+      - name: Install envtest binaries (kube-apiserver, etcd, kubectl)
+        run: |
+          mkdir -p ./testbin
+          # downloads binaries into ./testbin
+          go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin --force
+
+      - name: Debug: list envtest binaries
+        run: |
+          echo "KUBEBUILDER_ASSETS=${{ github.workspace }}/testbin"
+          ls -la ./testbin || true
+
+      - name: Run integration tests (envtest)
+        env:
+          # make envtest find the downloaded binaries
+          KUBEBUILDER_ASSETS: ${{ github.workspace }}/testbin
+        run: |
+          # Run integration package; use -count=1 to avoid cached results in CI
+          go test ./tests/integration -v -count=1
+
+  build-and-push:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set owner lowercase env
+        run: echo "OWNER_LC=${{ toLower(github.repository_owner) }}" >> $GITHUB_ENV
 
       - name: Set up QEMU (for multi-platform builds)
         uses: docker/setup-qemu-action@v3
@@ -23,18 +84,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Convert GitHub username to lowercase
-        id: lowercase
-        run: echo "OWNER_LC=${GITHUB_ACTOR,,}" >> $GITHUB_ENV
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -44,3 +101,6 @@ jobs:
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:latest
             ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}
+          # Optional: use build cache to speed up repeated builds (commented out by default)
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
