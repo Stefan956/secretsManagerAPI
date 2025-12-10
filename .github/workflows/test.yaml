@@ -44,12 +44,7 @@ jobs:
     name: Integration tests (envtest)
     runs-on: ubuntu-latest
     needs: unit
-    # Run integration on every PR commit and pushes;
-    # It is kept on pull_request so PR commits trigger it
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    env:
-      # expose the location where setup-envtest will download bins
-      KUBEBUILDER_ASSETS: ${{ github.workspace }}/testbin
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,17 +65,38 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Install envtest binaries
+      - name: Install setup-envtest and download envtest binaries
         run: |
-            mkdir -p ./testbin
-            # The flag '-p path' tells setup-envtest to print the actual location of the binaries
-            ASSETS_PATH=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use --bin-dir ./testbin -p path --force)
-            
-            # Write the variable to the GitHub Actions environment file so subsequent steps see it
-            echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
+          set -euxo pipefail
 
-      - name: Run integration tests
+          # prepare directory for downloaded binaries
+          mkdir -p ./testbin
+
+          # Install the setup-envtest tool (pin if you want reproducible tool version)
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+          # Use setup-envtest to download control-plane binaries.
+          # Replace "1.25.0" with the k8s version your tests expect.
+          ASSETS_PATH="$(setup-envtest use 1.25.0 -p path --bin-dir "$(pwd)/testbin" --force)"
+          echo "setup-envtest returned: $ASSETS_PATH"
+
+          # Verify etcd binary exists and is executable
+          if [ ! -x "$ASSETS_PATH/etcd" ]; then
+            echo "Contents of assets dir:"
+            ls -la "$ASSETS_PATH" || true
+            echo "ERROR: etcd not found or not executable at $ASSETS_PATH/etcd"
+            exit 1
+          fi
+
+          # Export for subsequent steps
+          echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
+
+      - name: Run integration tests (envtest)
+        env:
+          # make sure env is present (it will be from previous step via $GITHUB_ENV)
+          KUBEBUILDER_ASSETS: ${{ env.KUBEBUILDER_ASSETS }}
         run: |
-            # Verify the path is set correctly
-            echo "Running tests with assets at: $KUBEBUILDER_ASSETS"
-            go test ./tests/integration -v -count=1
+          set -euxo pipefail
+          echo "Using KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
+          ls -la "$KUBEBUILDER_ASSETS"
+          go test ./tests/integration -v -count=1
