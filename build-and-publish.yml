@@ -1,61 +1,119 @@
-name: Build and Publish Docker image
+name: Build and Publish Docker image (unit + integration + push)
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   workflow_dispatch:
 
-# Workflow-level permissions (minimum)
 permissions:
   contents: read
   packages: write
 
+env:
+  GOFLAGS: -mod=mod
+
 jobs:
+  test:
+    name: Run tests (unit + integration)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.25"
+
+      # compute lowercase owner and expose it to later steps in this job
+      - name: Lowercase repo owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ github.workspace }}/.modcache
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Install Go dependencies
+        run: go mod download
+
+      - name: Run unit tests (exclude integration)
+        run: |
+          set -euxo pipefail
+          PKGS="$(go list ./... | grep -v -E '(^|/)(tests/integration|tests/e2e)$')"
+          echo "Running unit tests for packages:"
+          echo "$PKGS"
+          go test $PKGS -v
+
+      - name: Install setup-envtest and download envtest binaries (kube-apiserver, etcd, kubectl)
+        run: |
+          set -euxo pipefail
+
+          mkdir -p ./testbin
+
+          # Install the setup-envtest CLI (pin the version if you want reproducibility)
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+          # Use the CLI to download control-plane binaries into ./testbin.
+          # Change "1.25.0" if your tests expect a different k8s version.
+          ASSETS_PATH="$(setup-envtest use 1.25.0 -p path --bin-dir "$(pwd)/testbin" --force)"
+
+          echo "setup-envtest placed assets at: $ASSETS_PATH"
+          echo "KUBEBUILDER_ASSETS=$ASSETS_PATH" >> $GITHUB_ENV
+
+          # quick verification: list files and check etcd exists and is executable
+          echo "Listing assets dir:"
+          ls -la "$ASSETS_PATH" || true
+
+          if [ ! -x "$ASSETS_PATH/etcd" ]; then
+            echo "ERROR: etcd not found or not executable at $ASSETS_PATH/etcd"
+            exit 1
+          fi
+
+      - name: Debug: show KUBEBUILDER_ASSETS and list
+        run: |
+          echo "KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS:-$GITHUB_WORKSPACE/testbin}"
+          ls -la "${KUBEBUILDER_ASSETS:-./testbin}" || true
+
+      - name: Run integration tests (envtest)
+        env:
+          # this env var comes from the previous step (written to $GITHUB_ENV)
+          KUBEBUILDER_ASSETS: ${{ env.KUBEBUILDER_ASSETS }}
+        run: |
+          set -euxo pipefail
+          echo "Using KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
+          ls -la "$KUBEBUILDER_ASSETS"
+          go test ./tests/integration -v -count=1
+
   build-and-push:
-    # Job-level permissions — explicit so org / repo overrides are less surprising
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    needs: test
+
     permissions:
       contents: read
       packages: write
 
-    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up QEMU (for multi-platform builds)
-        uses: docker/setup-qemu-action@v3
+      - name: Lowercase repo owner (job)
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      # If you have a CR_PAT secret (Personal Access Token), use it.
-      # This step runs only when the CR_PAT secret exists and is non-empty.
-      - name: Login to GitHub Container Registry (using CR_PAT)
-        if: ${{ secrets.CR_PAT }}
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.CR_PAT }}
-          
-      - name: Login to GitHub Container Registry (using GITHUB_TOKEN)
-        if: ${{ !secrets.CR_PAT }}
-        uses: docker/login-action@v2
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Show which token we used (diagnostic)
-        run: |
-          if [ -n "${{ secrets.CR_PAT }}" ]; then
-            echo "Using CR_PAT (personal access token) for GHCR login"
-          else
-            echo "Using GITHUB_TOKEN for GHCR login"
-          fi
-
-      - name: Build and push
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -63,5 +121,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ toLower(github.repository_owner) }}/secrets-manager-api:latest
-            ghcr.io/${{ toLower(github.repository_owner) }}/secrets-manager-api:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:latest
+            ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}
