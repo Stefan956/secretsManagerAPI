@@ -1,5 +1,29 @@
 package main
 
+// @title           Secrets Manager API
+// @version         1.0
+// @description     Secure API for managing secrets in Kubernetes
+// @termsOfService  https://github.com/Stefan956/secretsManagerAPI
+
+// @tag.name User
+// @tag.description Register, Login, Update and Delete User
+
+// @tag.name 		Secrets
+// @tag.description CRUD REST APIs for Secrets
+
+// @contact.name    Stefan Todorov
+// @contact.url     https://github.com/Stefan956
+// @contact.email   stefan.todorov24@mail.bg
+
+// @license.name    MIT
+// @license.url     https://opensource.org/licenses/MIT
+
+// @host      		localhost:8080
+// @BasePath  		/
+
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
 import (
 	"context"
 	"log"
@@ -10,6 +34,8 @@ import (
 	"secretsManagerAPI/internal/k8s"
 	"secretsManagerAPI/internal/server"
 	"time"
+
+	_ "secretsManagerAPI/docs"
 )
 
 func main() {

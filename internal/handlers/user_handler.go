@@ -26,7 +26,17 @@ func NewUserHandler(client k8s.K8sClient, jwtManager auth.JWTGenerator) *UserHan
 	}
 }
 
-// Register creates a new user namespace and stores credentials in a secret
+// Register godoc
+// @Summary Register a new user
+// @Description Creates a new user namespace and stores credentials in a secret
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param request body models.UserRequest true "New User credentials payload"
+// @Success 201 {object} models.UserResponse
+// @Failure 400 {string} string "Invalid request payload"
+// @Failure 500 {string} string "Failed to create user"
+// @Router /register [post]
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -71,7 +81,18 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Login validates user credentials and returns a JWT token
+// Login godoc
+// @Summary Authenticate user
+// @Description Validates credentials and returns a JWT token
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param request body models.UserRequest true "User credentials payload"
+// @Success 200 {object} models.UserResponse
+// @Failure 400 {string} string "Invalid request payload"
+// @Failure 401 {string} string "Invalid username or password"
+// @Failure 500 {string} string "Failed to generate token"
+// @Router /login [post]
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -122,7 +143,17 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// ChangeUserPassword allows a user to change their password
+// ChangeUserPassword godoc
+// @Summary Change user password
+// @Tags User
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body object true "New password payload"
+// @Success 200 {object} models.UserResponse
+// @Failure 401 {string} string "Unauthorized"
+// @Failure 500 {string} string "Failed to update password"
+// @Router /user/change-password/ [put]
 func (h *UserHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -175,7 +206,16 @@ func (h *UserHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// DeleteUser deletes the user namespace and all associated resources
+// DeleteUser godoc
+// @Summary Delete user account
+// @Description Deletes the user namespace and all associated resources
+// @Tags User
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} models.UserResponse
+// @Failure 401 {string} string "Unauthorized"
+// @Failure 500 {string} string "Failed to delete user"
+// @Router /user/delete/ [delete]
 func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

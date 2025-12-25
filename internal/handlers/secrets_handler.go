@@ -22,7 +22,19 @@ func NewSecretsHandler(client k8s.K8sClient) *SecretsHandler {
 	}
 }
 
-// CreateSecret handles POST /secrets
+// CreateSecret godoc
+// @Summary      Create a new secret
+// @Description  Creates a Kubernetes secret in the authenticated user's namespace
+// @Tags         Secrets
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        request body models.SecretRequest true "Secret payload"
+// @Success      201 {object} models.SecretResponse
+// @Failure      400 {string} string "Invalid request payload"
+// @Failure      401 {string} string "Unauthorized"
+// @Failure      500 {string} string "Internal server error"
+// @Router       /secrets/create/ [post]
 func (h *SecretsHandler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	username, ok := auth.GetUsername(r.Context())
 	if !ok {
@@ -88,7 +100,19 @@ func (h *SecretsHandler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetSecret handles GET /secrets/{name}
+// GetSecret godoc
+//
+// @Summary      Get a secret
+// @Description  Retrieves a secret by name from the authenticated user's namespace
+// @Tags Secrets
+// @Produce      json
+// @Security BearerAuth
+// @Success      200 {object} models.SecretResponse
+// @Failure      400 {string} string "Secret name missing"
+// @Failure      401 {string} string "Unauthorized"
+// @Failure      404 {string} string "Secret not found"
+// @Failure      500 {string} string "Internal server error"
+// @Router       /secrets/get/ [get]
 func (h *SecretsHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	username, ok := auth.GetUsername(r.Context())
 	if !ok {
@@ -122,7 +146,20 @@ func (h *SecretsHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// UpdateSecret handles PUT /secrets/{name}
+// UpdateSecret godoc
+//
+// @Summary      Update a secret
+// @Description  Updates an existing secret by name
+// @Tags Secrets
+// @Accept       json
+// @Produce      json
+// @Security BearerAuth
+// @Param        request body models.SecretRequest true "Updated secret data"
+// @Success      200 {object} models.SecretResponse
+// @Failure      400 {string} string "Invalid request payload"
+// @Failure      401 {string} string "Unauthorized"
+// @Failure      500 {string} string "Internal server error"
+// @Router       /secrets/update/ [put]
 func (h *SecretsHandler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
 	username, ok := auth.GetUsername(r.Context())
 	if !ok {
@@ -155,7 +192,17 @@ func (h *SecretsHandler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeleteSecret handles DELETE /secrets/{name}
+// DeleteSecret godoc
+//
+// @Summary      Delete a secret
+// @Description  Deletes a secret by name
+// @Tags Secrets
+// @Security BearerAuth
+// @Success      204 {string} string "No Content"
+// @Failure      400 {string} string "Secret name missing"
+// @Failure      401 {string} string "Unauthorized"
+// @Failure      500 {string} string "Internal server error"
+// @Router       /secrets/delete/ [delete]
 func (h *SecretsHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	username, ok := auth.GetUsername(r.Context())
 	if !ok {

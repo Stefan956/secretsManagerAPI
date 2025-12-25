@@ -2,9 +2,12 @@ package server
 
 import (
 	"net/http"
+	"os"
 	"secretsManagerAPI/internal/auth"
 	"secretsManagerAPI/internal/handlers"
 	"strings"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // scopedRoute represents a single API route
@@ -109,6 +112,11 @@ func NewRouter(jwtManager auth.JWT, userHandler handlers.UserHandlerInterface, s
 		}
 
 		mux.Handle(route.Pattern, handlerFunc)
+	}
+
+	// Swagger (public, dev-only)
+	if os.Getenv("APP_ENV") != "production" {
+		mux.Handle("/swagger/", httpSwagger.WrapHandler)
 	}
 
 	return mux
