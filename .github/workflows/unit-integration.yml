@@ -38,14 +38,7 @@ jobs:
         run: go mod download
 
       - name: Run unit tests (exclude integration/e2e)
-        run: |
-          set -euxo pipefail
-          # Build a list of packages and exclude tests/integration and tests/e2e
-          PKGS="$(go list ./... | grep -v -E '(/tests/integration$|/tests/e2e$)')"
-          echo "Running unit tests for packages:"
-          echo "$PKGS"
-          # Run tests only for the filtered packages
-          go test $PKGS -v
+        run: make unit-test
 
   integration:
     name: Integration tests (envtest)
@@ -98,11 +91,5 @@ jobs:
 
       - name: Run integration tests (envtest)
         env:
-          # KUBEBUILDER_ASSETS is set via $GITHUB_ENV in the previous step
           KUBEBUILDER_ASSETS: ${{ env.KUBEBUILDER_ASSETS }}
-        run: |
-          set -euxo pipefail
-          echo "Using KUBEBUILDER_ASSETS=$KUBEBUILDER_ASSETS"
-          ls -la "$KUBEBUILDER_ASSETS"
-          # Run only the integration tests
-          go test ./tests/integration -v -count=1
+        run: make integration-test
