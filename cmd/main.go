@@ -49,3 +49,5 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 }
+
+//Test argoCD deployment hash
