@@ -31,6 +31,8 @@ spec:
         app: secrets-manager-api
     spec:
       serviceAccountName: secrets-manager-sa
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: secrets-manager-api
           # CI updates this line on every push to main
