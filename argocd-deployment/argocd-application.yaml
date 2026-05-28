@@ -1,0 +1,41 @@
+# Apply this once to register the app with ArgoCD:
+#   kubectl apply -f argocd-deployment/argocd-application.yaml
+#
+# ArgoCD will then watch this repo and sync argocd-deployment/ on every commit to main.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: secrets-manager-api
+  namespace: argocd
+  # Ensures ArgoCD deletes all managed resources when the Application is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Stefan956/secretsManagerAPI.git
+    targetRevision: HEAD
+    path: argocd-deployment
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  syncPolicy:
+    automated:
+      # Remove resources from the cluster that are no longer in Git
+      prune: true
+      # Re-apply if someone manually changes a resource in the cluster
+      selfHeal: true
+    syncOptions:
+      # Creates the destination namespace if it does not exist
+      - CreateNamespace=true
+      # Uses server-side apply to handle large CRDs gracefully
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
