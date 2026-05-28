@@ -1,18 +1,21 @@
 name: ArgoCD Deploy
 
-# Builds, tests, pushes the Docker image, then updates the image tag in
-# argocd-deployment/deployment.yaml and commits it back.  ArgoCD detects the
-# commit and syncs the cluster automatically (auto-sync is on in the Application CR).
+# On push to main: build, push, and directly update the manifest (automated CD).
+# On workflow_dispatch: build, push, and open a PR so the update can be reviewed.
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Git SHA of the image to deploy (e.g. a3f1c8d92b4e). Leave blank to build & push from current commit."
+        required: false
+        type: string
 
-# contents:write is required to commit the updated image tag back to the repo.
-# GitHub Actions bot commits do NOT re-trigger workflow runs, so there is no loop.
 permissions:
   contents: write
   packages: write
+  pull-requests: write
 
 env:
   GOFLAGS: -mod=mod
@@ -68,7 +71,7 @@ jobs:
           go test ./tests/integration -v -count=1
 
   # ──────────────────────────────────────────────────────────────────────────
-  # 2. Build & push Docker image, then update the manifest so ArgoCD syncs
+  # 2. Build & push Docker image, then update the manifest
   # ──────────────────────────────────────────────────────────────────────────
   build-push-deploy:
     name: Build, push & update ArgoCD manifest
@@ -78,11 +81,11 @@ jobs:
     permissions:
       contents: write
       packages: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # Use the default GITHUB_TOKEN — bot commits won't re-trigger this workflow
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set lowercase repo owner
@@ -90,9 +93,12 @@ jobs:
           echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - uses: docker/setup-qemu-action@v3
+        if: github.event_name == 'push' || inputs.image_sha == ''
       - uses: docker/setup-buildx-action@v3
+        if: github.event_name == 'push' || inputs.image_sha == ''
 
       - name: Login to GitHub Container Registry
+        if: github.event_name == 'push' || inputs.image_sha == ''
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -100,30 +106,69 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        if: github.event_name == 'push' || inputs.image_sha == ''
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:latest
-            ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}
+          tags: ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}
 
-      # Replace whatever image tag is currently in the manifest with the new SHA.
-      # The pattern matches any tag after the last colon so it is idempotent.
-      - name: Update image tag in ArgoCD deployment manifest
+      # ── push to main: commit the manifest update directly ──────────────────
+      - name: Update manifest and commit (push to main)
+        if: github.event_name == 'push'
         run: |
           NEW_IMAGE="ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}"
           sed -i "s|image: ghcr.io/.*/secrets-manager-api:.*|image: ${NEW_IMAGE}|" \
-            ArgoCDDeployment/deployment.yaml
-
-      - name: Commit and push updated manifest
-        run: |
-          git config user.name "github-actions[bot]"
+            argocd-deployment/deployment.yaml
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ArgoCDDeployment/deployment.yaml
-          # Only commit if the file actually changed (idempotent on re-runs)
+          git add argocd-deployment/deployment.yaml
           git diff --staged --quiet || \
             git commit -m "ci: bump image tag to ${{ github.sha }}"
           git push
+
+      # ── workflow_dispatch: open a PR for review before ArgoCD syncs ────────
+      - name: Create branch, update manifest, and open PR (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the pasted SHA if provided, otherwise fall back to the current commit SHA
+          TARGET_SHA="${{ inputs.image_sha }}"
+          if [ -z "${TARGET_SHA}" ]; then
+            TARGET_SHA="${{ github.sha }}"
+          fi
+
+          SHORT="${TARGET_SHA:0:12}"
+          BRANCH="deploy/update-image-${SHORT}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+
+          NEW_IMAGE="ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${TARGET_SHA}"
+          sed -i "s|image: ghcr.io/.*/secrets-manager-api:.*|image: ${NEW_IMAGE}|" \
+            argocd-deployment/deployment.yaml
+
+          echo "--- updated image line ---"
+          grep "image:" argocd-deployment/deployment.yaml
+
+          git add argocd-deployment/deployment.yaml
+          git commit -m "deploy: update secrets-manager-api to ${TARGET_SHA}"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --title "deploy: update secrets-manager-api to ${TARGET_SHA}" \
+            --body "## Image Update
+
+Updates \`secrets-manager-api\` to image:
+
+\`\`\`
+ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${TARGET_SHA}
+\`\`\`
+
+**Merge this PR to \`main\` — ArgoCD will detect the commit and roll out new pods automatically.**" \
+            --base main \
+            --head "${BRANCH}"
