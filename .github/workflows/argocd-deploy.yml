@@ -159,16 +159,18 @@ jobs:
           git commit -m "deploy: update secrets-manager-api to ${TARGET_SHA}"
           git push origin "${BRANCH}"
 
-          gh pr create \
-            --title "deploy: update secrets-manager-api to ${TARGET_SHA}" \
-            --body "## Image Update
+          cat > /tmp/pr-body.md << EOF
+## Image Update
 
 Updates \`secrets-manager-api\` to image:
 
-\`\`\`
-ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${TARGET_SHA}
-\`\`\`
+\`ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${TARGET_SHA}\`
 
-**Merge this PR to \`main\` — ArgoCD will detect the commit and roll out new pods automatically.**" \
+**Merge this PR to \`main\` — ArgoCD will detect the commit and roll out new pods automatically.**
+EOF
+
+          gh pr create \
+            --title "deploy: update secrets-manager-api to ${TARGET_SHA}" \
+            --body-file /tmp/pr-body.md \
             --base main \
             --head "${BRANCH}"
