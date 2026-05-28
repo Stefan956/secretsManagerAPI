@@ -46,18 +46,6 @@ spec:
                 secretKeyRef:
                   name: secrets-manager-key
                   key: secret
-          readinessProbe:
-            httpGet:
-              path: /swagger/index.html
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /swagger/index.html
-              port: 8080
-            initialDelaySeconds: 15
-            periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service
