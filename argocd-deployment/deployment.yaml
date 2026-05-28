@@ -35,7 +35,7 @@ spec:
         - name: ghcr-pull-secret
       containers:
         - name: secrets-manager-api
-          # CI updates this line on every push to main
+          # CI updates this line — tag is the full git SHA, never "latest"
           image: ghcr.io/stefan956/secrets-manager-api:latest
           imagePullPolicy: Always
           ports:
