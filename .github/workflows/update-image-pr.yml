@@ -1,0 +1,78 @@
+name: Update Image Tag & Open PR
+
+# Manually triggered: paste the image tag you want to deploy.
+# The workflow creates a branch, updates argocd-deployment/deployment.yaml,
+# and opens a PR.  Merging the PR to main causes ArgoCD to roll out new pods.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (the git SHA, e.g. a3f1c8d92b4e)"
+        required: true
+        type: string
+
+permissions:
+  contents: write       # push the update branch
+  pull-requests: write  # open the PR
+
+jobs:
+  update-and-pr:
+    name: Update image tag and open PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase repo owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Create update branch
+        run: |
+          # Use only the first 12 characters so branch names stay readable
+          SHORT="${{ inputs.image_tag }}"
+          SHORT="${SHORT:0:12}"
+          BRANCH="deploy/update-image-${SHORT}"
+          echo "BRANCH=${BRANCH}" >> $GITHUB_ENV
+          git checkout -b "${BRANCH}"
+
+      - name: Update image tag in deployment manifest
+        run: |
+          NEW_IMAGE="ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ inputs.image_tag }}"
+          sed -i "s|image: ghcr.io/.*/secrets-manager-api:.*|image: ${NEW_IMAGE}|" \
+            argocd-deployment/deployment.yaml
+          # Confirm the substitution worked before committing
+          echo "--- updated image line ---"
+          grep "image:" argocd-deployment/deployment.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add argocd-deployment/deployment.yaml
+          git commit -m "deploy: update secrets-manager-api to ${{ inputs.image_tag }}"
+          git push origin "${{ env.BRANCH }}"
+
+      - name: Open Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          OWNER_LC="${{ env.OWNER_LC }}"
+          BRANCH="${{ env.BRANCH }}"
+
+          gh pr create \
+            --title "deploy: update secrets-manager-api to ${IMAGE_TAG}" \
+            --body "## Image Update
+
+Updates \`secrets-manager-api\` to:
+
+\`\`\`
+ghcr.io/${OWNER_LC}/secrets-manager-api:${IMAGE_TAG}
+\`\`\`
+
+**Merge this PR to \`main\` — ArgoCD will detect the commit and roll out new pods automatically.**" \
+            --base main \
+            --head "${BRANCH}"
