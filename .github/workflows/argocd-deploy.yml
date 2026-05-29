@@ -157,7 +157,7 @@ jobs:
 
           git add argocd-deployment/deployment.yaml
           git commit -m "deploy: update secrets-manager-api to ${TARGET_SHA}"
-          git push origin "${BRANCH}"
+          git push --force origin "${BRANCH}"
 
           echo "## Image Update" > /tmp/pr-body.md
           echo "" >> /tmp/pr-body.md
