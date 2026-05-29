@@ -36,7 +36,7 @@ spec:
       containers:
         - name: secrets-manager-api
           # CI updates this line — tag is the full git SHA, never "latest"
-          image: ghcr.io/stefan956/secrets-manager-api:385d0bfc194cad196776df1e84a120bca95eb927
+          image: ghcr.io/stefan956/secrets-manager-api:s96E7I6NYVihcgXOxD2JqCQ8zNSVsP2cAaZz
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
