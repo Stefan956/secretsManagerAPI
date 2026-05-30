@@ -1,10 +1,8 @@
 name: ArgoCD Deploy
 
-# On push to main: build, push, and directly update the manifest (automated CD).
-# On workflow_dispatch: build, push, and open a PR so the update can be reviewed.
+# Manually triggered only. Builds a new image (or uses a provided SHA),
+# then opens a PR to update argocd-deployment/deployment.yaml.
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
     inputs:
       image_sha:
@@ -71,7 +69,7 @@ jobs:
           go test ./tests/integration -v -count=1
 
   # ──────────────────────────────────────────────────────────────────────────
-  # 2. Build & push Docker image, then update the manifest
+  # 2. Build & push Docker image, then open a PR to update the manifest
   # ──────────────────────────────────────────────────────────────────────────
   build-push-deploy:
     name: Build, push & update ArgoCD manifest
@@ -93,12 +91,12 @@ jobs:
           echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - uses: docker/setup-qemu-action@v3
-        if: github.event_name == 'push' || inputs.image_sha == ''
+        if: inputs.image_sha == ''
       - uses: docker/setup-buildx-action@v3
-        if: github.event_name == 'push' || inputs.image_sha == ''
+        if: inputs.image_sha == ''
 
       - name: Login to GitHub Container Registry
-        if: github.event_name == 'push' || inputs.image_sha == ''
+        if: inputs.image_sha == ''
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -106,7 +104,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
-        if: github.event_name == 'push' || inputs.image_sha == ''
+        if: inputs.image_sha == ''
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -115,27 +113,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}
 
-      # ── push to main: commit the manifest update directly ──────────────────
-      - name: Update manifest and commit (push to main)
-        if: github.event_name == 'push'
-        run: |
-          NEW_IMAGE="ghcr.io/${{ env.OWNER_LC }}/secrets-manager-api:${{ github.sha }}"
-          sed -i "s|image: ghcr.io/.*/secrets-manager-api:.*|image: ${NEW_IMAGE}|" \
-            argocd-deployment/deployment.yaml
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add argocd-deployment/deployment.yaml
-          git diff --staged --quiet || \
-            git commit -m "ci: bump image tag to ${{ github.sha }}"
-          git push
-
-      # ── workflow_dispatch: open a PR for review before ArgoCD syncs ────────
-      - name: Create branch, update manifest, and open PR (workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Create branch, update manifest, and open PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use the pasted SHA if provided, otherwise fall back to the current commit SHA
           TARGET_SHA="${{ inputs.image_sha }}"
           if [ -z "${TARGET_SHA}" ]; then
             TARGET_SHA="${{ github.sha }}"
